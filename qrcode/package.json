@@ -5,12 +5,19 @@
   "version": "0.0.1",
   "grist": [
     {
-      "name": "QR Code",
+      "name": "QR code",
       "url": "https://gristlabs.github.io/grist-widget/qrcode/index.html",
       "widgetId": "@gristlabs/widget-qrcode",
       "published": true,
       "accessLevel": "read table",
-      "renderAfterReady": true
+      "renderAfterReady": true,
+      "description": "Generate custom QR codes based on data from a selected record.",
+      "authors": [
+        {
+          "name": "jperon",
+          "url": "https://github.com/jperon"
+        }
+      ]
     }
   ]
 }

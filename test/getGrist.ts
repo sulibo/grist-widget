@@ -1,13 +1,11 @@
 import {ChildProcess, execSync, spawn} from 'child_process';
 import FormData from 'form-data';
 import fs from 'fs';
-import {driver} from 'mocha-webdriver';
+import { assert, driver, enableDebugCapture } from 'mocha-webdriver';
 import fetch from 'node-fetch';
 
-import {GristWebDriverUtils} from 'test/gristWebDriverUtils';
-
-
-type UserAction = Array<string | number | object | boolean | null | undefined>;
+import {Key} from 'mocha-webdriver';
+import {GristWebDriverUtils} from "test/gristWebDriverUtils";
 
 /**
  * Set up mocha hooks for starting and stopping Grist. Return
@@ -16,6 +14,8 @@ type UserAction = Array<string | number | object | boolean | null | undefined>;
 export function getGrist(): GristUtils {
   const server = new GristTestServer();
   const grist = new GristUtils(server);
+
+  enableDebugCapture();
 
   before(async function () {
     // Server will have started up in a global fixture, we just
@@ -78,6 +78,12 @@ export class GristTestServer {
       );
     }
     const pwd = process.cwd();
+
+    // Make sure rewriteUrl.js is available in the buildtools directory.
+    if (!fs.existsSync(`${pwd}/buildtools/rewriteUrl.js`)) {
+      throw new Error(`Expected buildtools/rewriteUrl.js to exist at ${pwd}/buildtools/rewriteUrl.js`);
+    }
+
     this._assetServer = spawn('live-server', [
       `--port=${contentPort}`, '--no-browser', '-q',
       `--middleware=${pwd}/buildtools/rewriteUrl.js`
@@ -198,32 +204,56 @@ export class GristUtils extends GristWebDriverUtils {
     await this.waitForServer();
   }
 
-  public async sendActionsAndWaitForServer(actions: UserAction[], optTimeout: number = 2000) {
-    const result = await driver.executeAsyncScript(async (actions: any, done: Function) => {
-      try {
-        await (window as any).gristDocPageModel.gristDoc.get().docModel.docData.sendActions(actions);
-        done(null);
-      } catch (err) {
-        done(String(err?.message || err));
-      }
-    }, actions);
-    if (result) {
-      throw new Error(result as string);
-    }
-    await this.waitForServer(optTimeout);
+  // This method doesn't work in single user mode, need to fix upstream.
+  // For now it is  just overridden with a simpler version.
+  public override async openAccountMenu() {
+    await this.driver.findWait('.test-dm-account', 2000).click();
+    await this.driver.sleep(250); 
   }
 
-  public async clickWidgetPane() {
-    const elem = this.driver.find('.test-config-widget-select .test-select-open');
+  public async clickWidgetGallery() {
+    const elem = this.driver.find('.test-custom-widget-gallery-container');
     if (await elem.isPresent()) {
       await elem.click();
-      // if not present, may just be already selected.
     }
+  }
+
+  public async clickWidgetSection() {
+    await driver.findWait('.custom_view_container', 100).click();
   }
 
   public async selectCustomWidget(text: string | RegExp) {
-    await this.driver.findContent('.test-select-menu li', text).click();
+    await this.driver.findContent('.test-custom-widget-gallery-widget', text).click();
+    await this.driver.find('.test-custom-widget-gallery-save').click();
     await this.waitForServer();
+  }
+
+  public async removeWidget(name: string|RegExp) {
+    await this.selectSectionByTitle(name);
+    await this.sendCommand('deleteSection');
+    await this.waitForServer();
+  }
+
+  public async forceDismissTips() {
+    try {
+      await this.driver.findWait('.test-dp-add-new', 2000).doClick();
+      await this.driver.findWait('.test-dp-add-widget-to-page', 500).doClick();
+      await this.driver.sendKeys(Key.ESCAPE);
+      await this.driver.findWait('.test-behavioral-prompt-dont-show-tips', 500).click();
+      await this.driver.find('.test-behavioral-prompt-dismiss').click();
+      await this.waitForServer();
+    } catch (e) {
+      // If the tips are not shown, this will fail. Ignore.
+      console.warn("Behavioral prompt not shown, ignoring.");
+    }
+  }
+
+  public async addCustomSection(name: string, type: string, dataSource: string|RegExp= /Table1/) {
+    await this.addNewSection(/Custom/, dataSource, {dismissTips: true});
+    await this.clickWidgetGallery();
+    await this.selectCustomWidget(type);
+    await this.waitForServer();
+    await this.toggleSidePanel('right', 'open');
   }
 
   public async setCustomWidgetAccess(option: "none" | "read table" | "full") {
@@ -233,7 +263,11 @@ export class GristUtils extends GristWebDriverUtils {
       "full": "Full document access"
     };
     await this.driver.find(`.test-config-widget-access .test-select-open`).click();
-    await this.driver.findContent(`.test-select-menu li`, text[option]).click();
+    await this.driver.findContentWait(`.test-select-menu li`, text[option], 100).click();
+    await this.waitForServer();
+    await this.waitToPass(async () => {
+      assert.isFalse(await this.driver.find('.grist-floating-menu').isPresent());
+    });
   }
 
   public async waitForFrame() {
@@ -252,16 +286,20 @@ export class GristUtils extends GristWebDriverUtils {
     };
     const toggleDrop = async (selector: string) => await click(`${selector} .test-select-open`);
     const pickerDrop = (name: string) => `.test-config-widget-mapping-for-${name}`;
-    await toggleDrop(pickerDrop(name));
-    const clickOption = async (text: string | RegExp) => {
-      await driver.findContentWait('.test-select-menu li', text, 2000).click();
-      await this.waitForServer();
-    };
-    await clickOption(value);
+    await driver.findWait('.test-config-widget-mapping-for-' + name, 1000);
+    await this.waitToPass(async () => {
+      // There is still exchange in api calls between custom widget
+      // and Grist (ready message and themes update), so this picker
+      // might get recreated, and it is not easy to wait for it
+      await toggleDrop(pickerDrop(name));
+      await driver.findWait('.grist-floating-menu', 100);
+      await driver.findContentWait('.test-select-menu li', value, 100).click();
+    });
+    await this.waitForServer();
   }
 
   public async inCustomWidget<T>(op: () => Promise<T>): Promise<T> {
-    const iframe = driver.find('iframe');
+    const iframe = driver.findWait('iframe', 1000);
     try {
       await this.driver.switchTo().frame(iframe);
       return await op();
@@ -275,9 +313,49 @@ export class GristUtils extends GristWebDriverUtils {
     return this.inCustomWidget(() => this.driver.find(selector).getText());
   }
 
+  public async getCustomWidgetElementParameter(selector: string, parameter: string): Promise<string> {
+    return this.inCustomWidget(() => this.driver.find(selector).getAttribute(parameter));
+  }
+
   public async executeScriptInCustomWidget<T>(script: Function, ...args: any[]): Promise<T> {
     return this.inCustomWidget(() => {
       return driver.executeScript(script, ...args);
     })
+  }
+
+  public async login() {
+    //just click log in to get example account.
+    const menu = await this.driver.findWait('.test-dm-account', 1000);
+    await menu.click();
+    if (await this.isAlertShown()) {
+      await this.acceptAlert();
+    }
+    await this.waitForServer();
+    await this.dismissBehavioralPrompts();
+  }
+
+  public async addColumn(table: string, name: string) {
+    // focus on table
+    await this.selectSectionByTitle(table);
+    // add new column using a shortcut
+    await this.driver.actions().keyDown(Key.ALT).sendKeys('=').keyUp(Key.ALT).perform();
+    // wait for rename panel to show up
+    await this.driver.findWait('.test-column-title-popup', 1000);
+    // rename and accept
+    await this.driver.sendKeys(name);
+    await this.driver.sendKeys(Key.ENTER);
+    await this.waitForServer();
+  }
+
+  public async focusOnCell(columnName: string, row: number) {
+    const cell = await this.getCell({ col: columnName, rowNum: row });
+    await cell.click();
+  }
+
+  public async fillCell(columnName: string, row: number, value: string) {
+    await this.focusOnCell(columnName, row);
+    await this.driver.sendKeys(value)
+    await this.driver.sendKeys(Key.ENTER);
+    await this.waitForServer();
   }
 }

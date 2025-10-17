@@ -6,10 +6,13 @@ function ready(fn) {
   }
 }
 
+/**
+ * Demo is only shown when the row has no Issued or Due date.
+ */
 function addDemo(row) {
-  if (!row.Issued && !row.Due) {
+  if (!('Issued' in row) && !('Due' in row)) {
     for (const key of ['Number', 'Issued', 'Due']) {
-      if (!row[key]) { row[key] = key; }
+      if (!(key in row)) { row[key] = key; }
     }
     for (const key of ['Subtotal', 'Deduction', 'Taxes', 'Total']) {
       if (!(key in row)) { row[key] = key; }
@@ -151,8 +154,9 @@ function updateInvoice(row) {
     // Add some guidance about columns.
     const want = new Set(Object.keys(addDemo({})));
     const accepted = new Set(['References']);
-    const importance = ['Number', 'Client', 'Items', 'Total', 'Invoicer', 'Due', 'Issued', 'Subtotal', 'Deduction', 'Taxes', 'Note'];
-    if (!(row.Due || row.Issued)) {
+    const importance = ['Number', 'Client', 'Items', 'Total', 'Invoicer', 'Due', 
+                        'Issued', 'Subtotal', 'Deduction', 'Taxes', 'Note', 'Paid'];
+    if (!('Due' in row || 'Issued' in row)) {
       const seen = new Set(Object.keys(row).filter(k => k !== 'id' && k !== '_error_'));
       const help = row.Help = {};
       help.seen = prepareList(seen);

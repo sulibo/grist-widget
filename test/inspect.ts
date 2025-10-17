@@ -10,8 +10,8 @@ describe('inspect', function() {
     await grist.openDoc(docId);
     await grist.toggleSidePanel('right', 'open');
     await grist.addNewSection(/Custom/, /School/, {dismissTips: true});
-    await grist.clickWidgetPane();
-    await grist.selectCustomWidget('Inspect Record');
+    await grist.clickWidgetGallery();
+    await grist.selectCustomWidget('Inspect record');
     await grist.setCustomWidgetAccess('full');
     await grist.waitToPass(async () => {
       const txt = await grist.getCustomWidgetBody();

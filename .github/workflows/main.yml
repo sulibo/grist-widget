@@ -17,7 +17,9 @@ jobs:
         python-version: [3.9]
         node-version: [18.x]
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - name: Use Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v3
@@ -29,7 +31,7 @@ jobs:
         run: yarn install
 
       - name: Cache Docker images.
-        uses: ScribeMD/docker-cache@0.3.3
+        uses: AndreKurait/docker-cache@0.6.0
         with:
           key: docker-${{ runner.os }}-cache0
 

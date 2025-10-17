@@ -66,24 +66,27 @@ describe('calendar', function () {
   }
 
   it('should show calendar', async function () {
-      const docId = await grist.upload('test/fixtures/docs/Calendar.grist');
-      await grist.openDoc(docId);
-      await grist.toggleSidePanel('right', 'open');
-      await grist.addNewSection(/Custom/, /Table1/);
-      await grist.clickWidgetPane();
-      await grist.selectCustomWidget(/Calendar/);
-      await grist.setCustomWidgetAccess('full');
-      await grist.setCustomWidgetMapping('startDate', /From/);
-      await grist.setCustomWidgetMapping('endDate', /To/);
-      await grist.setCustomWidgetMapping('title', /Label/);
-      await grist.setCustomWidgetMapping('isAllDay', /IsFullDay/);
-      //sign in to grist
-      await grist.login();
+    const docId = await grist.upload('test/fixtures/docs/Calendar.grist');
+    await grist.openDoc(docId);
+    await grist.toggleSidePanel('right', 'open');
+    await grist.addNewSection(/Custom/, /Table1/);
+    await grist.clickWidgetGallery();
+    await grist.selectCustomWidget(/Calendar/);
+    await grist.setCustomWidgetAccess('full');
+    await grist.setCustomWidgetMapping('startDate', /From/);
+    await grist.setCustomWidgetMapping('endDate', /To/);
+    await grist.setCustomWidgetMapping('title', /Label/);
+    await grist.setCustomWidgetMapping('isAllDay', /IsFullDay/);
   });
 
   it('should create new event when new row is added', async function () {
+    //sign in to grist
+    await grist.login();
+
+    await grist.waitForFrame();
+
     await executeAndWaitForCalendar(async () => {
-      await grist.sendActionsAndWaitForServer([['AddRecord', 'Table1', -1, {
+      await grist.sendActions([['AddRecord', 'Table1', -1, {
         From: new Date('2023-08-03 13:00'),
         To: new Date('2023-08-03 14:00'),
         Label: "New Event",
@@ -101,7 +104,7 @@ describe('calendar', function () {
 
   it('should create new all day event when new row is added', async function () {
     await executeAndWaitForCalendar(async () => {
-      await grist.sendActionsAndWaitForServer([['AddRecord', 'Table1', -1, {
+      await grist.sendActions([['AddRecord', 'Table1', -1, {
         From: new Date('2023-08-04 13:00'),
         To: new Date('2023-08-04 14:00'),
         Label: "All Day Event",
@@ -120,7 +123,7 @@ describe('calendar', function () {
 
   it('should update event when table data is changed', async function () {
     await executeAndWaitForCalendar(async () => {
-      await grist.sendActionsAndWaitForServer([['UpdateRecord', 'Table1', 1, {
+      await grist.sendActions([['UpdateRecord', 'Table1', 1, {
         From: new Date('2023-08-03 13:00'),
         To: new Date('2023-08-03 15:00'),
         Label: "New Event",
@@ -138,7 +141,7 @@ describe('calendar', function () {
 
   it('should remove event when row is deleted', async function () {
     await executeAndWaitForCalendar(async () => {
-      await grist.sendActionsAndWaitForServer([['RemoveRecord', 'Table1', 1]]);
+      await grist.sendActions([['RemoveRecord', 'Table1', 1]]);
     });
     const mappedObject = await getCalendarEvent(1)
     assert.isNull(mappedObject);
@@ -201,9 +204,19 @@ describe('calendar', function () {
     // find a way to mock a date both in the system (by using TimeShift) and in the TUI Calendar to get rid of this
     // data builder here.
     const monthNameOf = (date: Date) => date.toLocaleString('en-us', {month: 'long', year: 'numeric'});
-    const shiftMonth = (date: Date, months: number) => {
+    const shiftMonth = (date: Date, months: 1 | -1) => {
       const newDate = new Date(date);
-      newDate.setMonth(date.getMonth() + months);
+      newDate.setDate(1);
+      const currentMonth = date.getMonth();
+      if (currentMonth === 0 && months === -1) {
+        newDate.setMonth(11);
+        newDate.setFullYear(newDate.getFullYear() - 1);
+      } else if (currentMonth === 11 && months === 1) {
+        newDate.setMonth(0);
+        newDate.setFullYear(newDate.getFullYear() + 1);
+      } else {
+        newDate.setMonth(currentMonth + months);
+      }
       return newDate;
     };
     const now = new Date(Date.now());
@@ -245,7 +258,6 @@ describe('calendar', function () {
     await grist.waitForFrame();
 
     await createCalendarEvent(12, 'Test1');
-    await grist.waitForServer();
     await grist.waitToPass(async () => {
       assert.equal(await eventsCount(), 1);
     });
@@ -260,7 +272,7 @@ describe('calendar', function () {
     assert.equal(await eventsCount(), 1);
 
     // Now configure bi-directional mapping.
-    await grist.sendActionsAndWaitForServer([
+    await grist.sendActions([
       ['UpdateRecord', '_grist_Views_section', 1, {linkSrcSectionRef: 4}],
       ['UpdateRecord', '_grist_Views_section', 4, {linkSrcSectionRef: 1}],
     ]);
@@ -305,6 +317,22 @@ describe('calendar', function () {
     await grist.undo(1);
   });
 
+  it("should show Record Card popup on double click", async function () {
+    await createCalendarEvent(18, 'TestRecordCard');
+    await grist.inCustomWidget(async () => {
+      const event = driver.findContentWait('.toastui-calendar-weekday-event-title', /TestRecordCard/, 1000);
+      await driver.withActions(a => a.doubleClick(event));
+    });
+    assert.isTrue(await driver.findWait('.test-record-card-popup-overlay', 1000).isDisplayed());
+    assert.equal(
+      await driver.find('.test-record-card-popup-wrapper .test-widget-title-text').getText(),
+      'TABLE1 Card'
+    );
+    assert.isTrue(await driver.findContent('.g_record_detail_value', 'TestRecordCard').isPresent());
+    await driver.sendKeys(Key.ESCAPE);
+    assert.isFalse(await driver.find('.test-record-card-popup-overlay').isPresent());
+  });
+
   //Helpers
   async function selectPerspective(perspective: 'month' | 'week' | 'day') {
     await grist.inCustomWidget(async () => {
@@ -318,7 +346,7 @@ describe('calendar', function () {
     });
   }
 
-  it("Switch language to polish, check if text are different", async function () {
+  it("switch language to polish, check if text are different", async function () {
     async function switchLanguage(language: string) {
       const profileSettings = await grist.openProfileSettingsPage();
       //Switch language
@@ -332,13 +360,12 @@ describe('calendar', function () {
         assert.equal(buttontext, text)
       });
     }
-    try {
-      await switchLanguage('Polski');
-      await assertTodayButtonText('dzisiaj');
-    } finally {
-      await switchLanguage('English');
-      await assertTodayButtonText('today');
-    }
+    await switchLanguage('Polski');
+    await grist.waitForFrame();
+    await assertTodayButtonText('dzisiaj');
+    await switchLanguage('English');
+    await grist.waitForFrame();
+    await assertTodayButtonText('today');
   });
 
   // TODO: test adding new events and moving existing one on the calendar.

@@ -8,6 +8,8 @@ let selectedTableId = null;
 let selectedRowId = null;
 let selectedRecords = null;
 let mode = 'multi';
+let mapSource = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}';
+let mapCopyright = 'Tiles &copy; Esri &mdash; Source: Esri, DeLorme, NAVTEQ, USGS, Intermap, iPC, NRCAN, Esri Japan, METI, Esri China (Hong Kong), Esri (Thailand), TomTom, 2012';
 // Required, Label value
 const Name = "Name";
 // Required
@@ -87,7 +89,7 @@ const selectedRowClusterIconFactory = function (selectedMarkerGetter) {
   }
 };
 
-const geocoder = L.Control.Geocoder && L.Control.Geocoder.nominatim();
+let geocoder = L.Control.Geocoder && L.Control.Geocoder.nominatim();
 if (URLSearchParams && location.search && geocoder) {
   const c = new URLSearchParams(location.search).get('geocoder');
   if (c && L.Control.Geocoder[c]) {
@@ -101,18 +103,14 @@ if (URLSearchParams && location.search && geocoder) {
 }
 
 async function geocode(address) {
-  return new Promise((resolve, reject) => {
-    try {
-      geocoder.geocode(address, (v) => {
-        v = v[0];
-        if (v) { v = v.center; }
-        resolve(v);
-      });
-    } catch (e) {
-      console.log("Problem:", e);
-      reject(e);
-    }
-  });
+  const results = await geocoder.geocode(address);
+  let v = results[0];
+
+  if (v) {
+    v = v.center;
+  }
+
+  return v;
 }
 
 async function delay(ms) {
@@ -139,11 +137,16 @@ async function scan(tableId, records, mappings) {
     // so after next round - we will check if the address is indeed changed.
     // But this field is optional, if it is not in the record (not mapped)
     // we will find the location each time (if coordinates are empty).
-    if (record[GeocodedAddress] && record[GeocodedAddress] !== record.Address) {
-      // We have caching field, and last address is diffrent.
-      // So clear coordinates (as if the record wasn't scanned before)
-      record[Longitude] = null;
-      record[Latitude] = null;
+    if (record[GeocodedAddress]) {
+      if (record[GeocodedAddress] == record.Address) {
+        // We have already (successfully or not) attempted to geocode this address, skip it
+        continue;
+      } else {
+        // We have caching field, and last address is diffrent.
+        // So clear coordinates (as if the record wasn't scanned before)
+        record[Longitude] = null;
+        record[Latitude] = null;
+      }
     }
     // If address is not empty, and coordinates are empty (or were cleared by cache)
     if (address && !record[Longitude]) {
@@ -151,9 +154,9 @@ async function scan(tableId, records, mappings) {
       const result = await geocode(address);
       // Update them, and update cache (if the field was mapped)
       await grist.docApi.applyUserActions([ ['UpdateRecord', tableId, record.id, {
-        [mappings[Longitude]]: result.lng,
-        [mappings[Latitude]]: result.lat,
-        ...(GeocodedAddress in mappings) ? {[mappings[GeocodedAddress]]: address} : undefined
+        [mappings[Longitude]]: result?.lng ?? null,
+        [mappings[Latitude]]: result?.lat ?? null,
+        ...(GeocodedAddress in mappings && mappings[GeocodedAddress]) ? {[mappings[GeocodedAddress]]: address} : undefined
       }] ]);
       await delay(1000);
     }
@@ -191,7 +194,7 @@ function getInfo(rec) {
 }
 
 // Function to clear last added markers. Used to clear the map when new record is selected.
-let clearMakers = () => {};
+let clearMarkers = () => {};
 
 let markers = [];
 
@@ -214,9 +217,7 @@ function updateMap(data) {
   //    Old source was natgeo world map, but that only has data up to zoom 16
   //    (can't zoom in tighter than about 10 city blocks across)
   //
-  const tiles = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
-  attribution: 'Tiles &copy; Esri &mdash; Source: Esri, DeLorme, NAVTEQ, USGS, Intermap, iPC, NRCAN, Esri Japan, METI, Esri China (Hong Kong), Esri (Thailand), TomTom, 2012'
-  });
+  const tiles = L.tileLayer(mapSource, { attribution: mapCopyright });
 
   const error = document.querySelector('.error');
   if (error) { error.remove(); }
@@ -288,7 +289,7 @@ function updateMap(data) {
   }
   map.addLayer(markers);
 
-  clearMakers = () => map.removeLayer(markers);
+  clearMarkers = () => map.removeLayer(markers);
 
   try {
     map.fitBounds(new L.LatLngBounds(points), {maxZoom: 15, padding: [0, 0]});
@@ -310,6 +311,16 @@ function updateMap(data) {
   makeSureSelectedMarkerIsShown();
 }
 
+
+function clearPopupMarker() {
+  const marker = popups[selectedRowId];
+  if (marker) {
+    marker.closePopup();
+    marker.setIcon(defaultIcon);
+    marker.pane = 'otherMarkers';
+  }
+}
+
 function selectMaker(id) {
    // Reset the options from the previously selected marker.
    const previouslyClicked = popups[selectedRowId];
@@ -325,7 +336,7 @@ function selectMaker(id) {
 
    // Set the options for the newly selected marker.
    marker.setIcon(selectedIcon);
-   previouslyClicked.pane = 'selectedMarker';
+   marker.pane = 'selectedMarker';
 
    // Rerender markers in this cluster
    markers.refreshClusters();
@@ -402,14 +413,21 @@ grist.onRecords((data, mappings) => {
 });
 
 grist.onNewRecord(() => {
-  clearMakers();
-  clearMakers = () => {};
+  if (mode === 'single') {
+    clearMarkers();
+    clearMarkers = () => {};
+  } else {
+    clearPopupMarker();
+  }
+  selectedRowId = null;
 })
 
 function updateMode() {
   if (mode === 'single') {
-    selectedRowId = lastRecord.id;
-    updateMap([lastRecord]);
+    if (lastRecord) {
+      selectedRowId = lastRecord.id;
+      updateMap([lastRecord]);
+    }
   } else {
     updateMap(lastRecords);
   }
@@ -430,6 +448,12 @@ function onEditOptions() {
       updateMode();
     }
   }
+  [ "mapSource", "mapCopyright" ].forEach((opt) => {
+    const ipt = document.getElementById(opt)
+    ipt.onchange = async (e) => {
+      await grist.setOption(opt, e.target.value);
+    }
+  })
 }
 
 const optional = true;
@@ -453,4 +477,10 @@ grist.onOptions((options, interaction) => {
   if (newMode != mode && lastRecords) {
     updateMode();
   }
+  const newSource = options?.mapSource ?? mapSource;
+  mapSource = newSource;
+  document.getElementById("mapSource").value = mapSource;
+  const newCopyright = options?.mapCopyright ?? mapCopyright;
+  mapCopyright = newCopyright
+  document.getElementById("mapCopyright").value = mapCopyright;
 });
